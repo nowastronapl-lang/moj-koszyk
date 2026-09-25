@@ -1,0 +1,19 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --bg-main: #F7F8FA;
+    --card-main: #FFFFFF;
+    --border-main: #E6E8EC;
+    --text-primary: #17181A;
+    --text-secondary: #737780;
+  }
+
+  body {
+    background-color: var(--bg-main);
+    color: var(--text-primary);
+    font-family: 'Inter', sans-serif;
+  }
+}
