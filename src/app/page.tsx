@@ -24,27 +24,30 @@ export default function Dashboard() {
   }, []);
 
   async function fetchReceipts() {
-    try {
-      setLoading(true);
-      const { data, error } = await supabase
-        .from('receipts')
-        .select('*')
-        .order('date', { ascending: false })
-        .limit(5);
+  try {
+    setLoading(false);
+    const { data, error } = await supabase
+      .from('receipts')
+      .select('*')
+      .order('date', { ascending: false })
+      .limit(5);
 
-      if (error) throw error;
-
-      if (data) {
-        setReceipts(data);
-        const total = data.reduce((acc, item) => acc + Number(item.total_amount), 0);
-        setTotalSpent(total);
-      }
-    } catch (err) {
-      console.error('Błąd podczas pobierania paragonów:', err);
-    } finally {
-      setLoading(false);
+    if (error) {
+      console.error('Kod błędu Supabase:', error.code, error.message, error.details);
+      return;
     }
+
+    if (data) {
+      setReceipts(data);
+      const total = data.reduce((acc, item) => acc + Number(item.total_amount), 0);
+      setTotalSpent(total);
+    }
+  } catch (err) {
+    console.error('Wystąpił wyjątek:', err);
+  } finally {
+    setLoading(false);
   }
+}
 
   return (
     <div className="min-h-screen bg-slate-950 text-slate-100 pb-24 pt-6 px-4 max-w-md mx-auto">
