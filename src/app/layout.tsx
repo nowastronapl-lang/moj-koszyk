@@ -7,7 +7,7 @@ const inter = Inter({ subsets: ['latin'] });
 
 export const metadata: Metadata = {
   title: 'Mój Koszyk',
-  description: 'Osobista pamięć zakupowa',
+  description: 'Zarządzaj swoimi paragonami i wydatkami',
 };
 
 export default function RootLayout({
@@ -16,14 +16,12 @@ export default function RootLayout({
   children: React.ReactNode;
 }) {
   return (
-    <html lang="pl">
-      <body className={`${inter.className} bg-bg-light text-txt-primary-light antialiased`}>
-        <div className="min-h-screen flex flex-col lg:flex-row">
-          <Navigation />
-          <div className="flex-1 lg:pl-64">
-            {children}
-          </div>
-        </div>
+    <html lang="pl" className="dark">
+      <body className={`${inter.className} bg-slate-950 text-slate-100 min-h-screen antialiased`}>
+        <main className="min-h-screen">
+          {children}
+        </main>
+        <Navigation />
       </body>
     </html>
   );

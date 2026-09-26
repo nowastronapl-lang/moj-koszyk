@@ -3,6 +3,7 @@ const isGithubActions = process.env.GITHUB_ACTIONS || false;
 
 const nextConfig = {
   output: 'export',
+  trailingSlash: true,
   basePath: isGithubActions ? '/moj-koszyk' : '',
   assetPrefix: isGithubActions ? '/moj-koszyk/' : '',
   images: {
