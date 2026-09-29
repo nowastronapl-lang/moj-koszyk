@@ -2,6 +2,7 @@
 
 import React, { useState, useRef } from 'react';
 import { useRouter } from 'next/navigation';
+// @ts-ignore
 import { GoogleGenerativeAI } from '@google/generative-ai';
 
 // Kompresja obrazu przed wysłaniem do Gemini API
