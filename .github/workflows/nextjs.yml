@@ -33,7 +33,7 @@ jobs:
         run: npx next build
         env:
           NEXT_TELEMETRY_DISABLED: 1
-          NET_PUBLIC_GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
 
       - name: Upload artifact
         uses: actions/upload-pages-artifact@v3
