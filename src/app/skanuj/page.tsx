@@ -2,10 +2,8 @@
 
 import React, { useState, useRef } from 'react';
 import { useRouter } from 'next/navigation';
-// @ts-ignore
-import { GoogleGenerativeAI } from '@google/generative-ai';
 
-// Kompresja obrazu przed wysłaniem do Gemini API
+// Szybka kompresja zdjęcia na canvasie do max 1024px (stabilność na telefonach)
 const compressImage = (file: File): Promise<string> => {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
@@ -15,53 +13,54 @@ const compressImage = (file: File): Promise<string> => {
       img.src = event.target?.result as string;
       img.onload = () => {
         const canvas = document.createElement('canvas');
-        const MAX_WIDTH = 1024;
-        const MAX_HEIGHT = 1024;
+        const MAX = 1024;
         let width = img.width;
         let height = img.height;
 
-        if (width > height) {
-          if (width > MAX_WIDTH) {
-            height *= MAX_WIDTH / width;
-            width = MAX_WIDTH;
-          }
-        } else {
-          if (height > MAX_HEIGHT) {
-            width *= MAX_HEIGHT / height;
-            height = MAX_HEIGHT;
-          }
+        if (width > height && width > MAX) {
+          height *= MAX / width;
+          width = MAX;
+        } else if (height > MAX) {
+          width *= MAX / height;
+          height = MAX;
         }
 
         canvas.width = width;
         canvas.height = height;
         const ctx = canvas.getContext('2d');
         ctx?.drawImage(img, 0, 0, width, height);
-        
-        // Zwraca Base64 (JPEG, jakość 0.7)
+
         const dataUrl = canvas.toDataURL('image/jpeg', 0.7);
         resolve(dataUrl.split(',')[1]);
       };
-      img.onerror = (error) => reject(error);
+      img.onerror = (err) => reject(err);
     };
-    reader.onerror = (error) => reject(error);
+    reader.onerror = (err) => reject(err);
   });
 };
 
 export default function SkanujPage() {
   const router = useRouter();
-  const cameraInputRef = useRef<HTMLInputElement>(null);
-  const galleryInputRef = useRef<HTMLInputElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+  // Dane odczytane przez AI – do ewentualnej edycji przez użytkownika
+  const [formData, setFormData] = useState<{
+    sklep: string;
+    kwota: string;
+    data: string;
+    kategoria: string;
+  } | null>(null);
+
+  const handleFileSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
 
     const apiKey = process.env.NEXT_PUBLIC_GEMINI_API_KEY;
     if (!apiKey) {
-      setError('Brak klucza API! Upewnij się, że NEXT_PUBLIC_GEMINI_API_KEY jest ustawiony na GitHub Actions.');
+      setError('Brak klucza API Gemini! Upewnij się, że dodano go w GitHub Secrets.');
       return;
     }
 
@@ -70,114 +69,183 @@ export default function SkanujPage() {
 
     try {
       const base64Image = await compressImage(file);
-      const genAI = new GoogleGenerativeAI(apiKey);
-      const model = genAI.getGenerativeModel({ model: 'gemini-1.5-flash' });
 
-      const prompt = `Przeanalizuj ten paragon i zwróć WYŁĄCZNIE prawidłowy obiekt JSON bez żadnego formatowania markdown (bez \`\`\`json).
-Format JSON:
+      // Bezpośrednie wywołanie Gemini REST API (działa niezawodnie na GitHub Pages)
+      const res = await fetch(
+        `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${apiKey}`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            contents: [
+              {
+                parts: [
+                  {
+                    inline_data: {
+                      mime_type: 'image/jpeg',
+                      data: base64Image,
+                    },
+                  },
+                  {
+                    text: `Odczytaj dane z tego paragonu i zwróć WYŁĄCZNIE czysty JSON w formacie:
 {
   "sklep": "Nazwa sklepu",
+  "kwota": "0.00",
   "data": "YYYY-MM-DD",
-  "suma": 0.00,
-  "kategoria": "Jedzenie" | "Transport" | "Dom" | "Rozrywka" | "Inne"
-}`;
+  "kategoria": "Spożywcze"
+}
+Dostępne kategorie: Spożywcze, Dom, Transport, Odzież, Elektronika, Inne. Zwróć sam JSON, bez opisu ani znaków markdown.`,
+                  },
+                ],
+              },
+            ],
+          }),
+        }
+      );
 
-      const result = await model.generateContent([
-        prompt,
-        {
-          inlineData: {
-            data: base64Image,
-            mimeType: 'image/jpeg',
-          },
-        },
-      ]);
+      const data = await res.json();
+      const rawText = data?.candidates?.[0]?.content?.parts?.[0]?.text || '';
+      const cleanJson = rawText.replace(/```json/g, '').replace(/```/g, '').trim();
 
-      const responseText = result.response.text().trim();
-      const cleanedJson = responseText.replace(/```json/g, '').replace(/```/g, '').trim();
-      const parsedData = JSON.parse(cleanedJson);
+      const parsed = JSON.parse(cleanJson);
 
-      // Zapisujemy odczytany paragon do localStorage lub przechodzimy dalej
-      const existingReceipts = JSON.parse(localStorage.getItem('paragony') || '[]');
-      const newReceipt = {
-        id: Date.now().toString(),
-        ...parsedData,
-        createdAt: new Date().toISOString(),
-      };
-      localStorage.setItem('paragony', JSON.stringify([newReceipt, ...existingReceipts]));
-
-      router.push('/');
-    } catch (err: any) {
+      setFormData({
+        sklep: parsed.sklep || '',
+        kwota: parsed.kwota ? String(parsed.kwota) : '',
+        data: parsed.data || new Date().toISOString().split('T')[0],
+        kategoria: parsed.kategoria || 'Spożywcze',
+      });
+    } catch (err) {
       console.error(err);
-      setError('Nie udało się odczytać paragonu. Upewnij się, że zdjęcie jest wyraźne.');
+      setError('Nie udało się odczytać paragonu. Wybierz inne zdjęcie lub uzupełnij dane ręcznie.');
+      // W razie błędu dajemy czysty formularz do wpisania
+      setFormData({ sklep: '', kwota: '', data: new Date().toISOString().split('T')[0], kategoria: 'Spożywcze' });
     } finally {
       setLoading(false);
     }
   };
 
+  const handleSave = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!formData) return;
+
+    // Zapis do localStorage
+    const existing = JSON.parse(localStorage.getItem('paragony') || '[]');
+    const newReceipt = { id: Date.now().toString(), ...formData };
+    localStorage.setItem('paragony', JSON.stringify([newReceipt, ...existing]));
+
+    router.push('/');
+  };
+
   return (
-    <div className="min-h-screen bg-slate-950 text-white p-4 flex flex-col justify-between max-w-md mx-auto">
-      {/* Ukryte inputy do przechwytywania zdjęć */}
+    <div className="min-h-screen bg-slate-950 text-white p-4 max-w-md mx-auto flex flex-col justify-center">
+      {/* UKRYTY INPUT - działa na aparacie i galerii bez blokowania */}
       <input
         type="file"
         accept="image/*"
-        capture="environment"
-        ref={cameraInputRef}
-        onChange={handleFileChange}
-        className="hidden"
-      />
-      <input
-        type="file"
-        accept="image/*"
-        ref={galleryInputRef}
-        onChange={handleFileChange}
+        ref={fileInputRef}
+        onChange={handleFileSelect}
         className="hidden"
       />
 
-      <header className="py-4">
-        <button
-          onClick={() => router.back()}
-          className="text-slate-400 hover:text-white transition flex items-center gap-2"
-        >
-          ← Wróć
-        </button>
-        <h1 className="text-2xl font-bold mt-4">Zeskanuj paragon</h1>
-        <p className="text-slate-400 text-sm">Zrób zdjęcie lub wybierz plik z galerii, a AI przeanalizuje dane.</p>
-      </header>
+      {!formData && !loading && (
+        <div className="text-center space-y-6">
+          <h1 className="text-2xl font-bold">Mój Koszyk</h1>
+          <p className="text-slate-400 text-sm">Zrób zdjęcie lub wgraj paragon z telefonu – AI sama wyciągnie dane.</p>
 
-      <main className="flex-1 flex flex-col items-center justify-center gap-6 my-8">
-        {loading ? (
-          <div className="flex flex-col items-center gap-4">
-            <div className="w-12 h-12 border-4 border-indigo-500 border-t-transparent rounded-full animate-spin"></div>
-            <p className="text-indigo-400 font-medium text-center">AI analizuje paragon...</p>
+          {error && <div className="p-3 bg-red-500/10 border border-red-500/50 text-red-400 text-xs rounded-xl">{error}</div>}
+
+          <button
+            onClick={() => fileInputRef.current?.click()}
+            className="w-full py-6 bg-indigo-600 hover:bg-indigo-500 active:scale-95 transition rounded-2xl font-bold text-lg shadow-lg shadow-indigo-500/25 flex items-center justify-center gap-3"
+          >
+            📷 Wybierz / Zrób zdjęcie
+          </button>
+        </div>
+      )}
+
+      {loading && (
+        <div className="text-center space-y-4">
+          <div className="w-12 h-12 border-4 border-indigo-500 border-t-transparent rounded-full animate-spin mx-auto"></div>
+          <p className="text-indigo-400 font-medium animate-pulse">Skanowanie i odczytywanie danych...</p>
+        </div>
+      )}
+
+      {/* WIDOK PO SKANOWANIU: Wypełnione dane do ew. szybkiej korekty */}
+      {formData && !loading && (
+        <form onSubmit={handleSave} className="space-y-4 bg-slate-900 p-6 rounded-2xl border border-slate-800">
+          <h2 className="text-lg font-bold text-emerald-400 flex items-center gap-2">
+            ✓ Odczytano dane z paragonu
+          </h2>
+          <p className="text-xs text-slate-400 mb-4">Sprawdź czy wszystko się zgadza. Możesz edytować dowolne pole.</p>
+
+          <div>
+            <label className="block text-xs font-medium text-slate-400 mb-1">Sklep</label>
+            <input
+              type="text"
+              value={formData.sklep}
+              onChange={(e) => setFormData({ ...formData, sklep: e.target.value })}
+              required
+              className="w-full p-3 bg-slate-800 border border-slate-700 rounded-xl text-white outline-none focus:border-indigo-500"
+            />
           </div>
-        ) : (
-          <div className="w-full space-y-4">
-            {error && (
-              <div className="bg-red-500/10 border border-red-500/50 text-red-400 p-4 rounded-xl text-sm text-center">
-                {error}
-              </div>
-            )}
 
-            <button
-              onClick={() => cameraInputRef.current?.click()}
-              className="w-full py-5 bg-indigo-600 hover:bg-indigo-500 active:scale-95 transition rounded-2xl font-semibold flex items-center justify-center gap-3 shadow-lg shadow-indigo-500/25"
+          <div>
+            <label className="block text-xs font-medium text-slate-400 mb-1">Kwota (zł)</label>
+            <input
+              type="number"
+              step="0.01"
+              value={formData.kwota}
+              onChange={(e) => setFormData({ ...formData, kwota: e.target.value })}
+              required
+              className="w-full p-3 bg-slate-800 border border-slate-700 rounded-xl text-white outline-none focus:border-indigo-500"
+            />
+          </div>
+
+          <div>
+            <label className="block text-xs font-medium text-slate-400 mb-1">Kategoria</label>
+            <select
+              value={formData.kategoria}
+              onChange={(e) => setFormData({ ...formData, kategoria: e.target.value })}
+              className="w-full p-3 bg-slate-800 border border-slate-700 rounded-xl text-white outline-none focus:border-indigo-500"
             >
-              📷 Zrób zdjęcie aparatem
+              <option value="Spożywcze">Spożywcze</option>
+              <option value="Dom">Dom</option>
+              <option value="Transport">Transport</option>
+              <option value="Odzież">Odzież</option>
+              <option value="Elektronika">Elektronika</option>
+              <option value="Inne">Inne</option>
+            </select>
+          </div>
+
+          <div>
+            <label className="block text-xs font-medium text-slate-400 mb-1">Data</label>
+            <input
+              type="date"
+              value={formData.data}
+              onChange={(e) => setFormData({ ...formData, data: e.target.value })}
+              required
+              className="w-full p-3 bg-slate-800 border border-slate-700 rounded-xl text-white outline-none focus:border-indigo-500"
+            />
+          </div>
+
+          <div className="flex gap-2 pt-2">
+            <button
+              type="button"
+              onClick={() => setFormData(null)}
+              className="w-1/3 py-3 bg-slate-800 hover:bg-slate-700 rounded-xl text-slate-300 text-sm font-medium"
+            >
+              Anuluj
             </button>
-
             <button
-              onClick={() => galleryInputRef.current?.click()}
-              className="w-full py-4 bg-slate-800 hover:bg-slate-700 active:scale-95 transition rounded-2xl font-medium text-slate-200 border border-slate-700 flex items-center justify-center gap-3"
+              type="submit"
+              className="w-2/3 py-3 bg-indigo-600 hover:bg-indigo-500 rounded-xl font-bold text-white text-sm shadow-lg shadow-indigo-500/25"
             >
-              🖼️ Wybierz z galerii
+              Zapisz wydatek
             </button>
           </div>
-        )}
-      </main>
-
-      <footer className="text-center text-xs text-slate-500 pb-4">
-        System automatycznie wykryje sklep, datę, kwotę i kategorię.
-      </footer>
+        </form>
+      )}
     </div>
   );
 }
